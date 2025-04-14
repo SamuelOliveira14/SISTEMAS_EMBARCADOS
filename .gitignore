@@ -1,7 +1,7 @@
 build/*
 sdkconfig
 sdkconfig.old
-compile.commands.json
+compile_commands.json
 .vscode/*
 .cache/*
 .clangd
