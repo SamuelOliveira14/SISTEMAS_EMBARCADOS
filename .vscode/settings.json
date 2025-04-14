@@ -1,9 +1,20 @@
 {
-    "C_Cpp.intelliSenseEngine": "default",
+    "C_Cpp.intelliSenseEngine": "Disabled",
+    "clangd.arguments": [
+        "--compile-commands-dir=build",       // Where your compile_commands.json is
+        "--background-index",                 // Enable background indexing
+        "--clang-tidy"                        // Enable clang-tidy checks
+      ],
     "idf.espIdfPathWin": "C:\\Users\\Paulo\\esp\\v5.4\\esp-idf",
     "idf.pythonInstallPath": "C:\\Users\\Paulo\\.espressif\\tools\\idf-python\\3.11.2\\python.exe",
     "idf.openOcdConfigs": [
-        "board/esp32-wrover-kit-3.3v.cfg"
+        "interface/ftdi/esp32_devkitj_v1.cfg",
+        "target/esp32.cfg"
     ],
-    "idf.toolsPathWin": "C:\\Users\\Paulo\\.espressif"
+    "idf.toolsPathWin": "C:\\Users\\Paulo\\.espressif",
+    "idf.customExtraVars": {
+        "IDF_TARGET": "esp32"
+    },
+    "idf.flashType": "UART",
+    "idf.portWin": "COM3"
 }
