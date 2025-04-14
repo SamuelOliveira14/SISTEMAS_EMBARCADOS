@@ -1,8 +1,8 @@
-build/
+build/*
 sdkconfig
 sdkconfig.old
 compile.commands.json
-.vscode
-.cache
+.vscode/*
+.cache/*
 .clangd
-cmake/
+cmake/*
