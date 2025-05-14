@@ -19,9 +19,10 @@
 #include "esp_mac.h"
 #include "esp_log.h"
 #include "driver/gpio.h"
+#include "driver/gptimer.h"
 
 // Criação da TAG para facilitação de análise dos logs.
-static const char* TAG = "P2";
+static const char* TAG = "P3";
 
 // Definição de pinos para GPIOs
 #define GPIO_INPUT_IO_0 21
@@ -32,12 +33,35 @@ static const char* TAG = "P2";
 #define GPIO_OUTPUT_IO_0 2
 #define GPIO_OUTPUT_PIN_SEL (1ULL<<GPIO_OUTPUT_IO_0)
 
+// Timer definitions
+#define ONE_SECOND_1MHZ 1 * 1000 * 1000 // 1s in 1 MHz clock resolution
+
+// Queue definitions
 static QueueHandle_t gpio_evt_queue = NULL;
+static QueueHandle_t timer_evt_queue = NULL;
 
 // Interruption handler
 static void IRAM_ATTR gpio_isr_handler(void * arg){
     uint32_t gpio_num = (uint32_t) arg;
     xQueueSendFromISR(gpio_evt_queue, &gpio_num, NULL);
+}
+
+static _Bool IRAM_ATTR timer_isr_handler(gptimer_handle_t timer, 
+                                        const gptimer_alarm_event_data_t *edata,
+                                        void *user_data){
+    
+    uint64_t current_timer_count = edata->count_value;
+
+    xQueueSendFromISR(timer_evt_queue, &current_timer_count, NULL);
+    
+    // reconfigure alarm
+    gptimer_alarm_config_t new_alarm_config = {
+        .alarm_count = edata->alarm_value + (ONE_SECOND_1MHZ),
+    };
+
+    gptimer_set_alarm_action(timer, &new_alarm_config);
+
+    return true;
 }
 
 static void led_task(void *arg){
@@ -78,10 +102,62 @@ const char* get_chip_model_name(int chip_model) {
     }
 }
 
-void app_main(void){
+static void configure_gpio(){
+    
+    // Prática 2 - GPIO
+    gpio_config_t io_configs = {};
 
-    ESP_LOGI(TAG,"Iniciando execução do código");
+    io_configs.intr_type = GPIO_INTR_NEGEDGE;
+    io_configs.mode = GPIO_MODE_INPUT;
+    io_configs.pin_bit_mask = GPIO_INPUT_PIN_SEL;
+    io_configs.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    io_configs.pull_up_en = GPIO_PULLUP_ENABLE;
 
+    gpio_config(&io_configs);
+
+    io_configs.intr_type = GPIO_INTR_DISABLE;
+    io_configs.mode = GPIO_MODE_OUTPUT;
+    io_configs.pin_bit_mask = GPIO_OUTPUT_PIN_SEL;
+    io_configs.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    io_configs.pull_up_en = GPIO_PULLUP_DISABLE;
+    gpio_config(&io_configs);
+
+    gpio_install_isr_service(0);
+    gpio_isr_handler_add(GPIO_INPUT_IO_0, gpio_isr_handler, (void *) GPIO_INPUT_IO_0);
+    gpio_isr_handler_add(GPIO_INPUT_IO_1, gpio_isr_handler, (void *) GPIO_INPUT_IO_1);
+    gpio_isr_handler_add(GPIO_INPUT_IO_2, gpio_isr_handler, (void *) GPIO_INPUT_IO_2);
+
+}
+
+static void configure_gptimer(){
+    gptimer_handle_t gptimer = NULL;
+    gptimer_config_t config = {
+        .direction = GPTIMER_COUNT_UP,
+        .clk_src = GPTIMER_CLK_SRC_DEFAULT,
+        .resolution_hz = 1000 * 1000
+    };
+
+    ESP_ERROR_CHECK(gptimer_new_timer(&config, &gptimer));
+
+    gptimer_alarm_config_t alarm_config = {
+        .reload_count = 0,
+        .alarm_count = ONE_SECOND_1MHZ,
+        .flags.auto_reload_on_alarm = false,
+    };
+
+    ESP_ERROR_CHECK(gptimer_set_alarm_action(gptimer, &alarm_config));
+
+    gptimer_event_callbacks_t cbs = {
+        .on_alarm = timer_isr_handler,
+    };
+
+    ESP_ERROR_CHECK(gptimer_register_event_callbacks(gptimer, &cbs, NULL));
+
+    ESP_ERROR_CHECK(gptimer_enable(gptimer));
+    ESP_ERROR_CHECK(gptimer_start(gptimer));
+}
+
+static void log_info(){
     esp_chip_info_t infos;
 
     // Preenche a struct esp_chip_info_t com as informações pertinentes.
@@ -116,33 +192,20 @@ void app_main(void){
             "%02X:%02X:%02X:%02X:%02X:%02X",
             baseMac[0], baseMac[1], baseMac[2], baseMac[3], baseMac[4], baseMac[5]);
     ESP_LOGI(TAG, "Endereço Bluetooth: %s", mac_str);
+}
 
-    // Prática 2 - GPIO
-    gpio_config_t io_configs = {};
+void app_main(void){
 
-    io_configs.intr_type = GPIO_INTR_NEGEDGE;
-    io_configs.mode = GPIO_MODE_INPUT;
-    io_configs.pin_bit_mask = GPIO_INPUT_PIN_SEL;
-    io_configs.pull_down_en = GPIO_PULLDOWN_DISABLE;
-    io_configs.pull_up_en = GPIO_PULLUP_ENABLE;
-
-    gpio_config(&io_configs);
-
-    io_configs.intr_type = GPIO_INTR_DISABLE;
-    io_configs.mode = GPIO_MODE_OUTPUT;
-    io_configs.pin_bit_mask = GPIO_OUTPUT_PIN_SEL;
-    io_configs.pull_down_en = GPIO_PULLDOWN_DISABLE;
-    io_configs.pull_up_en = GPIO_PULLUP_DISABLE;
-    gpio_config(&io_configs);
-
+    ESP_LOGI(TAG,"Iniciando execução do código");
+    log_info();
+    
+    // GPIO
     gpio_evt_queue = xQueueCreate(12, sizeof(uint32_t));
-
     xTaskCreate(led_task, "led_task", 2048, NULL, 12, NULL);
+    configure_gpio();
 
-    gpio_install_isr_service(0);
-    gpio_isr_handler_add(GPIO_INPUT_IO_0, gpio_isr_handler, (void *) GPIO_INPUT_IO_0);
-    gpio_isr_handler_add(GPIO_INPUT_IO_1, gpio_isr_handler, (void *) GPIO_INPUT_IO_1);
-    gpio_isr_handler_add(GPIO_INPUT_IO_2, gpio_isr_handler, (void *) GPIO_INPUT_IO_2);
+    timer_evt_queue = xQueueCreate(12, sizeof(uint64_t));
+    configure_gptimer();
 
     fflush(stdout);
 }
