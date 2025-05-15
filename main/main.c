@@ -6,84 +6,19 @@
 // #define ESP_LOG_COLOR_DISABLED     (1)  /* For Log v2 only */
 // #define ESP_LOG_TIMESTAMP_DISABLED (1)  /* For Log v2 only */
 #include <stdio.h>
-#include <inttypes.h>
 #include <stdlib.h>
 #include <string.h>
-#include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
 #include "esp_chip_info.h"
-#include "esp_flash.h"
-#include "esp_system.h"
 #include "esp_mac.h"
 #include "esp_log.h"
-#include "driver/gpio.h"
-#include "driver/gptimer.h"
+#include "gpio_setup.h"
+#include "timer_setup.h"
 
 // Criação da TAG para facilitação de análise dos logs.
-static const char* TAG = "P3";
-
-// Definição de pinos para GPIOs
-#define GPIO_INPUT_IO_0 21
-#define GPIO_INPUT_IO_1 22
-#define GPIO_INPUT_IO_2 23
-#define GPIO_INPUT_PIN_SEL ((1ULL<<GPIO_INPUT_IO_0) | (1ULL<<GPIO_INPUT_IO_1) | (1ULL<<GPIO_INPUT_IO_2))
-
-#define GPIO_OUTPUT_IO_0 2
-#define GPIO_OUTPUT_PIN_SEL (1ULL<<GPIO_OUTPUT_IO_0)
-
-// Timer definitions
-#define ONE_SECOND_1MHZ 1 * 1000 * 1000 // 1s in 1 MHz clock resolution
-
-// Queue definitions
-static QueueHandle_t gpio_evt_queue = NULL;
-static QueueHandle_t timer_evt_queue = NULL;
-
-// Interruption handler
-static void IRAM_ATTR gpio_isr_handler(void * arg){
-    uint32_t gpio_num = (uint32_t) arg;
-    xQueueSendFromISR(gpio_evt_queue, &gpio_num, NULL);
-}
-
-static _Bool IRAM_ATTR timer_isr_handler(gptimer_handle_t timer, 
-                                        const gptimer_alarm_event_data_t *edata,
-                                        void *user_data){
-    
-    uint64_t current_timer_count = edata->count_value;
-
-    xQueueSendFromISR(timer_evt_queue, &current_timer_count, NULL);
-    
-    // reconfigure alarm
-    gptimer_alarm_config_t new_alarm_config = {
-        .alarm_count = edata->alarm_value + (ONE_SECOND_1MHZ),
-    };
-
-    gptimer_set_alarm_action(timer, &new_alarm_config);
-
-    return true;
-}
-
-static void led_task(void *arg){
-    static uint32_t led_state = 0;
-    uint32_t io_num;
-    for ( ;; ){
-        if(xQueueReceive(gpio_evt_queue, &io_num, portMAX_DELAY)){
-            ESP_LOGI(TAG, "BOTAO %lu APERTADO. ESTADO = %d", io_num, gpio_get_level(io_num));
-            if(io_num == GPIO_INPUT_IO_0){
-                led_state = 1;
-                ESP_LOGI(TAG, "LED aceso!");
-            }else if(io_num == GPIO_INPUT_IO_1){
-                led_state = 0;
-                ESP_LOGI(TAG, "LED apagado!");
-            }else if (io_num == GPIO_INPUT_IO_2){
-                led_state = 1 - led_state;
-                ESP_LOGI(TAG, "LED invertido!");
-            }
-            gpio_set_level(GPIO_OUTPUT_IO_0, led_state);
-        }
-    }
-}
+static const char* TAG = "P3-Main";
 
 // Função para pegar modelo baseado no valor carregado na struct esp_chip_info_t
 const char* get_chip_model_name(int chip_model) {
@@ -100,61 +35,6 @@ const char* get_chip_model_name(int chip_model) {
         case 0:
         default: return "UNKNOWN";
     }
-}
-
-static void configure_gpio(){
-    
-    // Prática 2 - GPIO
-    gpio_config_t io_configs = {};
-
-    io_configs.intr_type = GPIO_INTR_NEGEDGE;
-    io_configs.mode = GPIO_MODE_INPUT;
-    io_configs.pin_bit_mask = GPIO_INPUT_PIN_SEL;
-    io_configs.pull_down_en = GPIO_PULLDOWN_DISABLE;
-    io_configs.pull_up_en = GPIO_PULLUP_ENABLE;
-
-    gpio_config(&io_configs);
-
-    io_configs.intr_type = GPIO_INTR_DISABLE;
-    io_configs.mode = GPIO_MODE_OUTPUT;
-    io_configs.pin_bit_mask = GPIO_OUTPUT_PIN_SEL;
-    io_configs.pull_down_en = GPIO_PULLDOWN_DISABLE;
-    io_configs.pull_up_en = GPIO_PULLUP_DISABLE;
-    gpio_config(&io_configs);
-
-    gpio_install_isr_service(0);
-    gpio_isr_handler_add(GPIO_INPUT_IO_0, gpio_isr_handler, (void *) GPIO_INPUT_IO_0);
-    gpio_isr_handler_add(GPIO_INPUT_IO_1, gpio_isr_handler, (void *) GPIO_INPUT_IO_1);
-    gpio_isr_handler_add(GPIO_INPUT_IO_2, gpio_isr_handler, (void *) GPIO_INPUT_IO_2);
-
-}
-
-static void configure_gptimer(){
-    gptimer_handle_t gptimer = NULL;
-    gptimer_config_t config = {
-        .direction = GPTIMER_COUNT_UP,
-        .clk_src = GPTIMER_CLK_SRC_DEFAULT,
-        .resolution_hz = 1000 * 1000
-    };
-
-    ESP_ERROR_CHECK(gptimer_new_timer(&config, &gptimer));
-
-    gptimer_alarm_config_t alarm_config = {
-        .reload_count = 0,
-        .alarm_count = ONE_SECOND_1MHZ,
-        .flags.auto_reload_on_alarm = false,
-    };
-
-    ESP_ERROR_CHECK(gptimer_set_alarm_action(gptimer, &alarm_config));
-
-    gptimer_event_callbacks_t cbs = {
-        .on_alarm = timer_isr_handler,
-    };
-
-    ESP_ERROR_CHECK(gptimer_register_event_callbacks(gptimer, &cbs, NULL));
-
-    ESP_ERROR_CHECK(gptimer_enable(gptimer));
-    ESP_ERROR_CHECK(gptimer_start(gptimer));
 }
 
 static void log_info(){
@@ -200,11 +80,12 @@ void app_main(void){
     log_info();
     
     // GPIO
-    gpio_evt_queue = xQueueCreate(12, sizeof(uint32_t));
+    setIOQueueHandle(xQueueCreate(12, sizeof(uint32_t)));
     xTaskCreate(led_task, "led_task", 2048, NULL, 12, NULL);
     configure_gpio();
 
-    timer_evt_queue = xQueueCreate(12, sizeof(uint64_t));
+    // GPTimer
+    setTimerQueueHandle(xQueueCreate(12, sizeof(uint64_t)));
     configure_gptimer();
 
     fflush(stdout);
