@@ -86,6 +86,7 @@ void app_main(void){
 
     // GPTimer
     setTimerQueueHandle(xQueueCreate(12, sizeof(uint64_t)));
+    xTaskCreate(gptimer_clock, "gptimer_clock", 2048, NULL, 12, NULL);
     configure_gptimer();
 
     fflush(stdout);
